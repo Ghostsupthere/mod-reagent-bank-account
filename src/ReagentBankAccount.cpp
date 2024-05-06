@@ -147,7 +147,11 @@ public:
         AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(2453, 30, 30, -18, 0) + "Herb", ITEM_SUBCLASS_HERB, 0);
         AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(2318, 30, 30, -18, 0) + "Leather", ITEM_SUBCLASS_LEATHER, 0);
         AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(1206, 30, 30, -18, 0) + "Jewelcrafting", ITEM_SUBCLASS_JEWELCRAFTING, 0);
+        //AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(4358, 30, 30, -18, 0) + "Explosives", ITEM_SUBCLASS_EXPLOSIVES, 0);
+        //AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(4388, 30, 30, -18, 0) + "Devices", ITEM_SUBCLASS_DEVICES, 0);
         AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(23572, 30, 30, -18, 0) + "Nether Material", ITEM_SUBCLASS_MATERIAL, 0);
+        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(38682, 30, 30, -18, 0) + "Armor Vellum", ITEM_SUBCLASS_ARMOR_ENCHANTMENT, 0);
+        AddGossipItemFor(player, GOSSIP_ICON_MONEY_BAG, GetItemIcon(39349, 30, 30, -18, 0) + "Weapon Vellum", ITEM_SUBCLASS_WEAPON_ENCHANTMENT, 0);
         SendGossipMenuFor(player, NPC_TEXT_ID, creature->GetGUID());
         return true;
     }
@@ -230,79 +234,71 @@ public:
         }));
     }
 
-    void DepositAllReagents(Player* player) {
+    void DepositAllReagents(Player* player) 
+    {
         WorldSession* session = player->GetSession();
-        std::string query = "SELECT item_entry, item_subclass, amount FROM custom_reagent_bank_account WHERE account_id = " + std::to_string(player->GetSession()->GetAccountId());
-        session->GetQueryProcessor().AddCallback(CharacterDatabase.AsyncQuery(query).WithCallback([=, this](QueryResult result) {
-            std::map<uint32, uint32> entryToAmountMap;
-            std::map<uint32, uint32> entryToSubclassMap;
-            std::map<uint32, uint32> itemsAddedMap;
-            if (result)
-            {
-                do {
-                    uint32 itemEntry = (*result)[0].Get<uint32>();
-                    uint32 itemSubclass = (*result)[1].Get<uint32>();
-                    uint32 itemAmount = (*result)[2].Get<uint32>();
+        std::string query = "SELECT item_entry, item_subclass, amount FROM custom_reagent_bank_account WHERE account_id = " + std::to_string(session->GetAccountId());
+        session->GetQueryProcessor().AddCallback(CharacterDatabase.AsyncQuery(query).WithCallback([=, this](QueryResult result) 
+    {
+        std::map<uint32, uint32> entryToAmountMap;
+        std::map<uint32, uint32> entryToSubclassMap;
+        std::map<uint32, uint32> itemsAddedMap;
+        if (result) {
+            do {
+                uint32 itemEntry = (*result)[0].Get<uint32>();
+                uint32 itemSubclass = (*result)[1].Get<uint32>();
+                uint32 itemAmount = (*result)[2].Get<uint32>();
+                // Exclude Explosives and Devices from being deposited
+                if (itemSubclass != ITEM_SUBCLASS_EXPLOSIVES && itemSubclass != ITEM_SUBCLASS_DEVICES) 
+                {
                     entryToAmountMap[itemEntry] = itemAmount;
                     entryToSubclassMap[itemEntry] = itemSubclass;
-                } while (result->NextRow());
-            }
-            // Inventory Items
-            for (uint8 i = INVENTORY_SLOT_ITEM_START; i < INVENTORY_SLOT_ITEM_END; ++i)
+                }
+            } while (result->NextRow());
+        }
+        // Handle the inventory and update the database accordingly
+        for (uint8 i = INVENTORY_SLOT_ITEM_START; i < INVENTORY_SLOT_ITEM_END; ++i) 
+        {
+            if (Item* pItem = player->GetItemByPos(INVENTORY_SLOT_BAG_0, i)) 
             {
-                if (Item* pItem = player->GetItemByPos(INVENTORY_SLOT_BAG_0, i))
+                UpdateItemCount(entryToAmountMap, entryToSubclassMap, itemsAddedMap, pItem, player, INVENTORY_SLOT_BAG_0, i);
+            }
+        }
+        for (uint32 i = INVENTORY_SLOT_BAG_START; i < INVENTORY_SLOT_BAG_END; i++) 
+        {
+            Bag* bag = player->GetBagByPos(i);
+            if (!bag) continue;
+            for (uint32 j = 0; j < bag->GetBagSize(); j++) 
+            {
+                if (Item* pItem = player->GetItemByPos(i, j)) 
                 {
-                    UpdateItemCount(entryToAmountMap, entryToSubclassMap, itemsAddedMap, pItem, player, INVENTORY_SLOT_BAG_0, i);
-                }
-
-            }
-            // Bag Items
-            for (uint32 i = INVENTORY_SLOT_BAG_START; i < INVENTORY_SLOT_BAG_END; i++)
-            {
-                Bag* bag = player->GetBagByPos(i);
-                if (!bag)
-                    continue;
-                for (uint32 j = 0; j < bag->GetBagSize(); j++) {
-                    if (Item* pItem = player->GetItemByPos(i, j))
-                    {
-                        UpdateItemCount(entryToAmountMap, entryToSubclassMap, itemsAddedMap, pItem, player, i, j);
-                    }
+                    UpdateItemCount(entryToAmountMap, entryToSubclassMap, itemsAddedMap, pItem, player, i, j);
                 }
             }
-            if (entryToAmountMap.size() != 0)
-            {
-                auto trans = CharacterDatabase.BeginTransaction();
-                for (std::pair<uint32, uint32> mapEntry : entryToAmountMap)
-                {
-                    uint32 itemEntry = mapEntry.first;
-                    uint32 itemAmount = mapEntry.second;
-                    uint32 itemSubclass = entryToSubclassMap.find(itemEntry)->second;
-                    trans->Append("REPLACE INTO custom_reagent_bank_account (account_id, item_entry, item_subclass, amount) VALUES ({}, {}, {}, {})", player->GetSession()->GetAccountId(), itemEntry, itemSubclass, itemAmount);
-                }
-                CharacterDatabase.CommitTransaction(trans);
+        }
+        // Perform database operations to reflect the new state of the reagent bank
+        if (!entryToAmountMap.empty()) {
+            auto trans = CharacterDatabase.BeginTransaction();
+            for (const auto& [itemEntry, itemAmount] : entryToAmountMap) {
+                uint32 itemSubclass = entryToSubclassMap[itemEntry];
+                trans->Append("REPLACE INTO custom_reagent_bank_account (account_id, item_entry, item_subclass, amount) VALUES ({}, {}, {}, {})", session->GetAccountId(), itemEntry, itemSubclass, itemAmount);
             }
-            if (itemsAddedMap.size() != 0)
-            {
-                ChatHandler(player->GetSession()).SendSysMessage("The following was deposited:");
-
-                for (std::pair<uint32, uint32> mapEntry : itemsAddedMap)
-                {
-                    uint32 itemEntry = mapEntry.first;
-                    uint32 itemAmount = mapEntry.second;
-
-                    ItemTemplate const* itemTemplate = sObjectMgr->GetItemTemplate(itemEntry);
-                    std::string itemName = itemTemplate->Name1;
-                    ChatHandler(player->GetSession()).SendSysMessage(std::to_string(itemAmount) + " " + itemName);
+            CharacterDatabase.CommitTransaction(trans);
+        }
+        if (!itemsAddedMap.empty()) {
+            ChatHandler(session).SendSysMessage("The following items were deposited:");
+            for (const auto& [itemEntry, itemAmount] : itemsAddedMap) {
+                ItemTemplate const* itemTemplate = sObjectMgr->GetItemTemplate(itemEntry);
+                if (itemTemplate) {
+                    ChatHandler(session).PSendSysMessage("%u %s", itemAmount, itemTemplate->Name1.c_str());
                 }
             }
-            else
-            {
-                ChatHandler(player->GetSession()).PSendSysMessage("No reagents to deposit.");
-            }
-            }));
-
-        CloseGossipMenuFor(player);
-    }
+        } else {
+            ChatHandler(session).PSendSysMessage("No reagents to deposit.");
+        }
+    }));
+    CloseGossipMenuFor(player);
+}
 };
 
 class Reagent_Command : public CommandScript
