@@ -290,7 +290,7 @@ public:
             for (const auto& [itemEntry, itemAmount] : itemsAddedMap) {
                 ItemTemplate const* itemTemplate = sObjectMgr->GetItemTemplate(itemEntry);
                 if (itemTemplate) {
-                    ChatHandler(session).PSendSysMessage("%u %s", itemAmount, itemTemplate->Name1.c_str());
+                    ChatHandler(session).SendSysMessage(std::to_string(itemAmount) + " " + GetItemLink(itemEntry, session));
                 }
             }
         } else {
